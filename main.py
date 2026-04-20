@@ -5,51 +5,33 @@ import os
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return jsonify({
-        "message": "Welcome to Number Info API",
-        "usage": "/info?number=PHONE_NUMBER"
-    })
-
-
-@app.route('/info', methods=['GET'])
-def number_info():
-    phone_number = request.args.get('number')
-    if not phone_number:
-        return jsonify({"error": "Please provide ?number= parameter"}), 400
-
-    if not phone_number.isdigit() and not (phone_number.startswith('+') and phone_number[1:].isdigit()):
-        return jsonify({"error": "Invalid phone number format"}), 400
+def lookup_phone_number(phone_number):
+    url = "https://calltracer.in"
+    headers = {
+        "Host": "calltracer.in",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    payload = {
+        "country": "IN",
+        "q": phone_number
+    }
 
     try:
-        url = "https://calltracer.in"
-        headers = {
-            "Host": "calltracer.in",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        payload = {
-            "country": "IN",
-            "q": phone_number
-        }
-
-        # Send POST request
+        # POST রিকোয়েস্ট পাঠানো হচ্ছে
         response = requests.post(url, headers=headers, data=payload, timeout=10)
-
-        if response.status_code != 200:
-            return jsonify({"error": f"Failed to fetch data. HTTP {response.status_code}"}), 500
-
+        response.raise_for_status()
+        
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Function to extract table cell text based on label
+        # টেবিল থেকে তথ্য খোঁজার ফাংশন
         def get_value(label):
             cell = soup.find(string=lambda t: t and label in t)
             if cell:
-                td = cell.find_parent("tr")
-                if td and td.find_all("td"):
-                    tds = td.find_all("td")
+                tr = cell.find_parent("tr")
+                if tr and tr.find_all("td"):
+                    tds = tr.find_all("td")
                     if len(tds) > 1:
                         return tds[1].get_text(strip=True)
             return "N/A"
@@ -76,16 +58,41 @@ def number_info():
             "Tower Locations": get_value("Tower Locations"),
         }
 
-        # Check if all fields are N/A (no info found)
-        if all(v == "N/A" for v in data.values()):
-            return jsonify({"error": "No data found for this number."}), 404
+        # যদি কোনো তথ্য না পাওয়া যায়
+        if all(v == "N/A" for k, v in data.items() if k != "Number"):
+            return {"error": "No data found for this number."}, 404
+            
+        return data, 200
 
-        return jsonify(data)
-
+    except requests.exceptions.RequestException as e:
+        return {"error": f"Network error: {str(e)}"}, 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": f"Unexpected error: {str(e)}"}, 500
 
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "active",
+        "message": "Welcome to Number Info API",
+        "usage": "/info?number=PHONE_NUMBER"
+    })
+
+@app.route('/info', methods=['GET'])
+def number_info():
+    phone_number = request.args.get('number')
+    
+    if not phone_number:
+        return jsonify({"error": "Please provide ?number= parameter"}), 400
+
+    # নাম্বার ফরম্যাট চেক
+    clean_number = phone_number.replace('+', '').strip()
+    if not clean_number.isdigit():
+        return jsonify({"error": "Invalid phone number format"}), 400
+
+    result, status_code = lookup_phone_number(phone_number)
+    return jsonify(result), status_code
 
 if __name__ == '__main__':
+    # পোর্ট সেট করা (ডিফল্ট ৫০০০)
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
